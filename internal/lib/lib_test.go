@@ -1,10 +1,9 @@
-package main
+package lib
 
 import (
 	"context"
 	"fmt"
 	"reflect"
-	"regexp"
 	"sort"
 	"testing"
 
@@ -71,14 +70,16 @@ func (m mockKafkaClient) ListNodes(ctx context.Context, params *kafka.ListNodesI
 	return &out, nil
 }
 
-func TestGetStaticConfigs(t *testing.T) {
+func TestGenerateSDContent(t *testing.T) {
 	t.Run("OneClusterTwoBrokersFullMonitoring", func(t *testing.T) {
 		var client mockKafkaClient
 		client.clusters = make(map[string]mockCluster)
 		client.clusters["arn:::my-cluster"] = mockCluster{2, "my-cluster", true, true}
 
-		got, _ := GetStaticConfigs(client)
-		want := []PrometheusStaticConfig{
+		sdc := SDClient{JobPrefix: "msk"}
+
+		got, _ := sdc.DiscoverRegion(client)
+		want := []PrometheusSDEntry{
 			{
 				Targets: []string{
 					"b-1.broker.com:11001",
@@ -104,8 +105,11 @@ func TestGetStaticConfigs(t *testing.T) {
 		client.clusters["arn:::my-cluster"] = mockCluster{2, "my-cluster", true, true}
 		client.clusters["arn:::my-other-cluster"] = mockCluster{2, "my-other-cluster", true, false}
 
-		got, _ := GetStaticConfigs(client)
-		want := []PrometheusStaticConfig{
+		sdc := SDClient{JobPrefix: "msk"}
+
+		got, _ := sdc.DiscoverRegion(client)
+
+		want := []PrometheusSDEntry{
 			{
 				Targets: []string{
 					"b-1.broker.com:11001",
@@ -141,10 +145,12 @@ func TestGetStaticConfigs(t *testing.T) {
 		client.clusters = make(map[string]mockCluster)
 		client.clusters["arn:::my-cluster"] = mockCluster{2, "my-cluster", false, false}
 
-		got, _ := GetStaticConfigs(client)
-		want := []PrometheusStaticConfig{}
+		sdc := SDClient{JobPrefix: "msk"}
 
-		if !reflect.DeepEqual(got, want) {
+		got, _ := sdc.DiscoverRegion(client)
+
+		var want []PrometheusSDEntry
+		if len(got) > 0 {
 			t.Errorf("got %s want %s", got, want)
 		}
 	})
@@ -153,140 +159,16 @@ func TestGetStaticConfigs(t *testing.T) {
 		var client mockKafkaClient
 		client.clusters = make(map[string]mockCluster)
 
-		got, _ := GetStaticConfigs(client)
-		want := []PrometheusStaticConfig{}
-		if !reflect.DeepEqual(got, want) {
+		sdc := SDClient{}
+
+		got, _ := sdc.DiscoverRegion(client)
+		var want []PrometheusSDEntry
+		if len(got) > 0 {
 			t.Errorf("got %s want %s", got, want)
 		}
 	})
-
 }
 
 func strPtr(str string) *string {
 	return &str
-}
-
-func Test_filterClusters(t *testing.T) {
-	type args struct {
-		clusters kafka.ListClustersOutput
-		filter   Filter
-	}
-	defaultFilter := Filter{
-		NameFilter: *(regexp.MustCompile(``)),
-	}
-
-	testClusterFilter := Filter{
-		NameFilter: *(regexp.MustCompile(`test`)),
-	}
-
-	tagFilter := Filter{
-		NameFilter: *(regexp.MustCompile(``)),
-		TagFilter: map[string]string{
-			"Enviroment": "test",
-			"SomeOther": "tag",
-		},
-	}
-
-	tests := []struct {
-		name string
-		args args
-		want *kafka.ListClustersOutput
-	}{
-		{
-			name: "empty-filter",
-			args: args{
-				clusters: kafka.ListClustersOutput{
-					ClusterInfoList: []types.ClusterInfo{
-						{
-							ClusterName: strPtr("test-cluster"),
-						},
-					},
-				},
-				filter: defaultFilter,
-			},
-			want: &kafka.ListClustersOutput{
-				ClusterInfoList: []types.ClusterInfo{
-					{
-						ClusterName: strPtr("test-cluster"),
-					},
-				},
-			},
-		},
-		{
-			name: "test-cluster-filter",
-			args: args{
-				clusters: kafka.ListClustersOutput{
-					ClusterInfoList: []types.ClusterInfo{
-						{
-							ClusterName: strPtr("test-cluster"),
-						},
-						{
-							ClusterName: strPtr("filtered-cluster"),
-						},
-					},
-				},
-				filter: testClusterFilter,
-			},
-			want: &kafka.ListClustersOutput{
-				ClusterInfoList: []types.ClusterInfo{
-					{
-						ClusterName: strPtr("test-cluster"),
-					},
-				},
-			},
-		},
-		{
-			name: "test-tag-filter",
-			args: args{
-				clusters: kafka.ListClustersOutput{
-					ClusterInfoList: []types.ClusterInfo{
-						{
-							ClusterName: strPtr("test-cluster"),
-							Tags: map[string]string{
-								"Enviroment": "test",
-								"SomeOther": "DifferentTag",
-							},
-						},
-						{
-							ClusterName: strPtr("second-test-cluster"),
-							Tags: map[string]string{
-								"Enviroment": "staging",
-								"SomeOther": "tag",
-							},
-						},
-						{
-							ClusterName: strPtr("filtered-cluster"),
-						},
-					},
-				},
-				filter: tagFilter,
-			},
-			want: &kafka.ListClustersOutput{
-				ClusterInfoList: []types.ClusterInfo{
-					{
-						ClusterName: strPtr("test-cluster"),
-						Tags:  map[string]string{
-							"Enviroment": "test",
-							"SomeOther": "DifferentTag",
-						},
-					},
-					{
-						ClusterName: strPtr("second-test-cluster"),
-						Tags: map[string]string{
-							"Enviroment": "staging",
-							"SomeOther": "tag",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := filterClusters(tt.args.clusters, tt.args.filter); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("filterClusters() = %v, want %v", got, tt.want)
-			}
-		})
-	}
 }
